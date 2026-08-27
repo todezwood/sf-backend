@@ -50,6 +50,25 @@ def init_db() -> None:
     from app import models  # noqa: F401  (register models on Base.metadata)
 
     Base.metadata.create_all(bind=engine)
+    _upgrade_sqlite_schema()
+
+
+def _upgrade_sqlite_schema() -> None:
+    """
+    Minimal in-place upgrade for pre-existing SQLite databases.
+
+    `create_all` creates missing tables but never alters existing ones, so a
+    file-backed database from before a column was added would fail every
+    query. There is no migration tool in this project; for the columns we
+    have added, an additive `ALTER TABLE` is safe and idempotent.
+    """
+    if engine.dialect.name != "sqlite":
+        return
+    with engine.begin() as connection:
+        rows = connection.exec_driver_sql("PRAGMA table_info(contacts)")
+        existing = {row[1] for row in rows}
+        if "photo" not in existing:
+            connection.exec_driver_sql("ALTER TABLE contacts ADD COLUMN photo TEXT")
 
 
 def get_db() -> Generator[Session, None, None]:

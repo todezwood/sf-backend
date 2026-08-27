@@ -202,6 +202,24 @@ def test_patch_null_clears_photo(client, payload):
     assert response.json()["photo"] is None
 
 
+def test_init_db_adds_photo_column_to_legacy_table():
+    from sqlalchemy import inspect
+
+    from app.database import Base, engine, init_db
+
+    Base.metadata.drop_all(bind=engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE contacts (id INTEGER PRIMARY KEY, first_name VARCHAR(100),"
+            " last_name VARCHAR(100), email VARCHAR(320))"
+        )
+
+    init_db()
+
+    columns = {column["name"] for column in inspect(engine).get_columns("contacts")}
+    assert "photo" in columns
+
+
 def test_put_replaces_existing_photo(client, payload):
     contact_id = client.post(BASE, json={**payload, "photo": PHOTO}).json()["id"]
     new_photo = "data:image/jpeg;base64," + base64.b64encode(b"another-image").decode()

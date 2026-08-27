@@ -108,8 +108,13 @@ also read):
 
 ```
 first_name, last_name, email, phone, company, job_title,
-address, city, state, postal_code, country, notes, photo
+addresses, notes, photo
 ```
+
+`addresses` is a list of up to 10 postal addresses, each with a `type` of
+`Home`, `Work`, or `Other` plus optional `street`, `city`, `state`,
+`postal_code`, and `country`. It rides inside contact payloads — there are no
+separate address endpoints.
 
 `photo` is a base64 data URL of type `image/png`, `image/jpeg`, `image/webp`,
 or `image/gif` (SVG is rejected), at most 2,000,000 characters (≈1.5 MB

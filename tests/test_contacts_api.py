@@ -276,6 +276,32 @@ def test_patch_null_clears_photo(client, payload):
     assert response.json()["photo"] is None
 
 
+def test_init_db_migrates_flat_addresses_from_legacy_table():
+    from app.database import Base, engine, init_db
+
+    Base.metadata.drop_all(bind=engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE contacts (id INTEGER PRIMARY KEY, first_name VARCHAR(100),"
+            " last_name VARCHAR(100), email VARCHAR(320), address VARCHAR(300),"
+            " city VARCHAR(120), state VARCHAR(120), postal_code VARCHAR(20),"
+            " country VARCHAR(120))"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO contacts (first_name, last_name, email, address, city, state, postal_code, country)"
+            " VALUES ('Ada', 'Lovelace', 'ada@example.com', '1 Market St', 'San Francisco', 'CA', '94105', 'USA'),"
+            " ('Grace', 'Hopper', 'grace@example.com', NULL, NULL, NULL, NULL, NULL)"
+        )
+
+    init_db()
+
+    with engine.begin() as connection:
+        rows = connection.exec_driver_sql(
+            "SELECT contact_id, type, street, city FROM addresses"
+        ).fetchall()
+    assert rows == [(1, "Home", "1 Market St", "San Francisco")]
+
+
 def test_init_db_adds_photo_column_to_legacy_table():
     from sqlalchemy import inspect
 

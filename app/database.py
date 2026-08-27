@@ -1,6 +1,7 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect
+from sqlalchemy.exc import DatabaseError
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -50,6 +51,34 @@ def init_db() -> None:
     from app import models  # noqa: F401  (register models on Base.metadata)
 
     Base.metadata.create_all(bind=engine)
+    _apply_additive_upgrades()
+
+
+def _apply_additive_upgrades() -> None:
+    """
+    Minimal in-place upgrade for pre-existing databases.
+
+    `create_all` creates missing tables but never alters existing ones, so a
+    persistent database (file-backed SQLite or Postgres) from before a column
+    was added would fail every query. There is no migration tool in this
+    project; for the columns we have added, a plain additive `ALTER TABLE` is
+    safe, idempotent, and valid on every supported dialect.
+    """
+    inspector = inspect(engine)
+    if not inspector.has_table("contacts"):
+        return
+    existing = {column["name"] for column in inspector.get_columns("contacts")}
+    if "photo" not in existing:
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql("ALTER TABLE contacts ADD COLUMN photo TEXT")
+        except DatabaseError:
+            # Two workers can race this check-then-alter; the loser's ALTER
+            # fails on the now-existing column. Confirm that is what happened
+            # and re-raise anything else.
+            refreshed = {column["name"] for column in inspect(engine).get_columns("contacts")}
+            if "photo" not in refreshed:
+                raise
 
 
 def get_db() -> Generator[Session, None, None]:

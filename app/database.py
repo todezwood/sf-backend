@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -50,24 +50,25 @@ def init_db() -> None:
     from app import models  # noqa: F401  (register models on Base.metadata)
 
     Base.metadata.create_all(bind=engine)
-    _upgrade_sqlite_schema()
+    _apply_additive_upgrades()
 
 
-def _upgrade_sqlite_schema() -> None:
+def _apply_additive_upgrades() -> None:
     """
-    Minimal in-place upgrade for pre-existing SQLite databases.
+    Minimal in-place upgrade for pre-existing databases.
 
     `create_all` creates missing tables but never alters existing ones, so a
-    file-backed database from before a column was added would fail every
-    query. There is no migration tool in this project; for the columns we
-    have added, an additive `ALTER TABLE` is safe and idempotent.
+    persistent database (file-backed SQLite or Postgres) from before a column
+    was added would fail every query. There is no migration tool in this
+    project; for the columns we have added, a plain additive `ALTER TABLE` is
+    safe, idempotent, and valid on every supported dialect.
     """
-    if engine.dialect.name != "sqlite":
+    inspector = inspect(engine)
+    if not inspector.has_table("contacts"):
         return
-    with engine.begin() as connection:
-        rows = connection.exec_driver_sql("PRAGMA table_info(contacts)")
-        existing = {row[1] for row in rows}
-        if "photo" not in existing:
+    existing = {column["name"] for column in inspector.get_columns("contacts")}
+    if "photo" not in existing:
+        with engine.begin() as connection:
             connection.exec_driver_sql("ALTER TABLE contacts ADD COLUMN photo TEXT")
 
 

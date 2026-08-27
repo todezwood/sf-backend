@@ -1,6 +1,7 @@
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, event, inspect
+from sqlalchemy.exc import DatabaseError
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -68,8 +69,16 @@ def _apply_additive_upgrades() -> None:
         return
     existing = {column["name"] for column in inspector.get_columns("contacts")}
     if "photo" not in existing:
-        with engine.begin() as connection:
-            connection.exec_driver_sql("ALTER TABLE contacts ADD COLUMN photo TEXT")
+        try:
+            with engine.begin() as connection:
+                connection.exec_driver_sql("ALTER TABLE contacts ADD COLUMN photo TEXT")
+        except DatabaseError:
+            # Two workers can race this check-then-alter; the loser's ALTER
+            # fails on the now-existing column. Confirm that is what happened
+            # and re-raise anything else.
+            refreshed = {column["name"] for column in inspect(engine).get_columns("contacts")}
+            if "photo" not in refreshed:
+                raise
 
 
 def get_db() -> Generator[Session, None, None]:

@@ -150,6 +150,80 @@ def test_root_lists_entrypoints(client):
     assert body["contacts"] == BASE
 
 
+def test_create_contact_with_addresses(client, payload):
+    response = client.post(BASE, json=payload)
+    assert response.status_code == 201
+    addresses = response.json()["addresses"]
+    assert len(addresses) == 1
+    assert addresses[0]["type"] == "Work"
+    assert addresses[0]["city"] == "San Francisco"
+    assert addresses[0]["id"] > 0
+
+
+def test_address_type_must_be_known(client, payload):
+    payload["addresses"][0]["type"] = "Castle"
+    assert client.post(BASE, json=payload).status_code == 422
+
+
+def test_address_list_is_capped(client, payload):
+    payload["addresses"] = [{"type": "Other", "city": f"City {i}"} for i in range(11)]
+    assert client.post(BASE, json=payload).status_code == 422
+
+
+def test_put_replaces_address_list_without_orphans(client, payload):
+    payload["addresses"] = [
+        {"type": "Home", "city": "London"},
+        {"type": "Work", "city": "Cambridge"},
+        {"type": "Other", "city": "Bletchley"},
+    ]
+    contact_id = client.post(BASE, json=payload).json()["id"]
+
+    replacement = {**payload, "addresses": [{"type": "Home", "city": "Manchester"}]}
+    response = client.put(f"{BASE}/{contact_id}", json=replacement)
+    assert response.status_code == 200
+    addresses = response.json()["addresses"]
+    assert [address["city"] for address in addresses] == ["Manchester"]
+
+    # The replaced rows are deleted, not orphaned.
+    from app.database import SessionLocal
+    from app.models import Address
+    from sqlalchemy import func, select
+
+    with SessionLocal() as db:
+        total = db.execute(select(func.count()).select_from(Address)).scalar_one()
+    assert total == 1
+
+
+def test_put_without_addresses_clears_them(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    response = client.put(
+        f"{BASE}/{contact_id}",
+        json={"first_name": "Ada", "last_name": "Lovelace", "email": "ada@example.com"},
+    )
+    assert response.status_code == 200
+    assert response.json()["addresses"] == []
+
+
+def test_patch_preserves_addresses_when_omitted(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"job_title": "Chief Engineer"})
+    assert response.status_code == 200
+    assert len(response.json()["addresses"]) == 1
+
+
+def test_deleting_contact_cascades_to_addresses(client, payload):
+    contact_id = client.post(BASE, json=payload).json()["id"]
+    assert client.delete(f"{BASE}/{contact_id}").status_code == 204
+
+    from app.database import SessionLocal
+    from app.models import Address
+    from sqlalchemy import func, select
+
+    with SessionLocal() as db:
+        total = db.execute(select(func.count()).select_from(Address)).scalar_one()
+    assert total == 0
+
+
 def test_create_contact_with_photo(client, payload):
     response = client.post(BASE, json={**payload, "photo": PHOTO})
     assert response.status_code == 201

@@ -1,7 +1,7 @@
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Contact
+from app.models import Address, Contact
 from app.schemas import ContactCreate, ContactReplace, ContactUpdate
 
 SORTABLE_FIELDS = ("id", "first_name", "last_name", "email", "company", "created_at", "updated_at")
@@ -62,7 +62,8 @@ def list_contacts(
 def create_contact(db: Session, payload: ContactCreate) -> Contact:
     data = payload.model_dump()
     data["email"] = _normalize_email(data["email"])
-    contact = Contact(**data)
+    addresses = data.pop("addresses", [])
+    contact = Contact(**data, addresses=[Address(**address) for address in addresses])
     db.add(contact)
     db.commit()
     db.refresh(contact)
@@ -70,7 +71,10 @@ def create_contact(db: Session, payload: ContactCreate) -> Contact:
 
 
 def replace_contact(db: Session, contact: Contact, payload: ContactReplace) -> Contact:
-    for field, value in payload.model_dump().items():
+    data = payload.model_dump()
+    # Reassigning the relationship replaces the list; delete-orphan drops the old rows.
+    contact.addresses = [Address(**address) for address in data.pop("addresses", [])]
+    for field, value in data.items():
         setattr(contact, field, _normalize_email(value) if field == "email" else value)
     db.commit()
     db.refresh(contact)
@@ -78,7 +82,11 @@ def replace_contact(db: Session, contact: Contact, payload: ContactReplace) -> C
 
 
 def update_contact(db: Session, contact: Contact, payload: ContactUpdate) -> Contact:
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if "addresses" in data:
+        # Present means "replace the list"; an explicit null clears it.
+        contact.addresses = [Address(**address) for address in data.pop("addresses") or []]
+    for field, value in data.items():
         setattr(contact, field, _normalize_email(value) if field == "email" else value)
     db.commit()
     db.refresh(contact)

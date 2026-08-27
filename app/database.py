@@ -79,6 +79,39 @@ def _apply_additive_upgrades() -> None:
             refreshed = {column["name"] for column in inspect(engine).get_columns("contacts")}
             if "photo" not in refreshed:
                 raise
+    _migrate_flat_addresses(existing)
+
+
+def _migrate_flat_addresses(contact_columns: set[str]) -> None:
+    """
+    Copy pre-existing flat address columns into the addresses table.
+
+    Databases created before the one-to-many model kept the address on the
+    contact row itself. When those legacy columns are present and the (new,
+    empty) addresses table has no rows yet, carry the data over as one
+    "Home" address per contact so the upgrade loses nothing. The legacy
+    columns are left in place — SQLite cannot drop columns portably, and the
+    ORM simply no longer reads them.
+    """
+    legacy = {"address", "city", "state", "postal_code", "country"}
+    if not legacy <= contact_columns:
+        return
+    # The copy and the blanking of the source columns commit together: the
+    # nulled columns are the migration marker, so a re-run — or a concurrent
+    # worker, once the first commit lands — finds nothing left to move. The
+    # NOT EXISTS guard additionally keeps the insert idempotent per contact.
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO addresses (contact_id, type, street, city, state, postal_code, country) "
+            "SELECT id, 'Home', address, city, state, postal_code, country FROM contacts "
+            "WHERE COALESCE(address, city, state, postal_code, country) IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM addresses WHERE addresses.contact_id = contacts.id)"
+        )
+        connection.exec_driver_sql(
+            "UPDATE contacts SET address = NULL, city = NULL, state = NULL, "
+            "postal_code = NULL, country = NULL "
+            "WHERE COALESCE(address, city, state, postal_code, country) IS NOT NULL"
+        )
 
 
 def get_db() -> Generator[Session, None, None]:

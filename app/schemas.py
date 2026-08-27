@@ -1,6 +1,33 @@
+import base64
+import binascii
+import re
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
+
+# Photos are stored inline as base64 data URLs. SVG is deliberately excluded:
+# it can carry scripts, and none of the allowed rasters can.
+_PHOTO_DATA_URL = re.compile(r"^data:image/(png|jpeg|webp|gif);base64,")
+# ≈1.5 MB decoded — plenty for an avatar, small enough to keep payloads sane.
+MAX_PHOTO_CHARS = 2_000_000
+
+
+def validate_photo(value: str | None) -> str | None:
+    """Shared check for every write path that accepts a photo."""
+    if value is None:
+        return None
+    if len(value) > MAX_PHOTO_CHARS:
+        raise ValueError(f"Photo must be at most {MAX_PHOTO_CHARS} characters (about 1.5 MB decoded)")
+    match = _PHOTO_DATA_URL.match(value)
+    if match is None:
+        raise ValueError("Photo must be a data URL of type image/png, image/jpeg, image/webp, or image/gif")
+    if match.end() == len(value):
+        raise ValueError("Photo payload is empty")
+    try:
+        base64.b64decode(value[match.end() :], validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("Photo payload is not valid base64") from None
+    return value
 
 
 class ContactBase(BaseModel):
@@ -69,6 +96,14 @@ class ContactBase(BaseModel):
         description="Free-form notes about the contact. No length limit.",
         examples=["Met at the SF hackathon."],
     )
+    photo: str | None = Field(
+        default=None,
+        description=(
+            "Contact photo as a base64 data URL (image/png, image/jpeg, "
+            "image/webp, or image/gif). At most 2,000,000 characters."
+        ),
+        examples=["data:image/png;base64,iVBORw0KGgo="],
+    )
 
 
 _FULL_EXAMPLE = {
@@ -88,13 +123,22 @@ _FULL_EXAMPLE = {
 _MINIMAL_EXAMPLE = {"first_name": "Grace", "last_name": "Hopper", "email": "grace@example.com"}
 
 
-class ContactCreate(ContactBase):
+class _ValidatesPhoto(BaseModel):
+    """Write-side photo validation. Read models skip re-checking stored data."""
+
+    @field_validator("photo", check_fields=False)
+    @classmethod
+    def _photo_is_a_safe_image(cls, value: str | None) -> str | None:
+        return validate_photo(value)
+
+
+class ContactCreate(ContactBase, _ValidatesPhoto):
     """Body of `POST /api/v1/contacts`. Only the two names and email are required."""
 
     model_config = ConfigDict(json_schema_extra={"examples": [_FULL_EXAMPLE, _MINIMAL_EXAMPLE]})
 
 
-class ContactReplace(ContactBase):
+class ContactReplace(ContactBase, _ValidatesPhoto):
     """
     Body of `PUT /api/v1/contacts/{contact_id}`.
 
@@ -105,7 +149,7 @@ class ContactReplace(ContactBase):
     model_config = ConfigDict(json_schema_extra={"examples": [_FULL_EXAMPLE]})
 
 
-class ContactUpdate(BaseModel):
+class ContactUpdate(_ValidatesPhoto):
     """
     Body of `PATCH /api/v1/contacts/{contact_id}`.
 
@@ -134,6 +178,10 @@ class ContactUpdate(BaseModel):
     postal_code: str | None = Field(default=None, max_length=20, description="New postal code.")
     country: str | None = Field(default=None, max_length=120, description="New country.")
     notes: str | None = Field(default=None, description="New notes; replaces the existing text.")
+    photo: str | None = Field(
+        default=None,
+        description="New photo as a base64 data URL; an explicit `null` removes it.",
+    )
 
 
 class ContactRead(ContactBase):

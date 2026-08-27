@@ -1,4 +1,8 @@
+import base64
+
 BASE = "/api/v1/contacts"
+
+PHOTO = "data:image/png;base64," + base64.b64encode(b"not-a-real-png").decode()
 
 
 def test_health(client):
@@ -144,3 +148,63 @@ def test_delete_contact(client, payload):
 def test_root_lists_entrypoints(client):
     body = client.get("/").json()
     assert body["contacts"] == BASE
+
+
+def test_create_contact_with_photo(client, payload):
+    response = client.post(BASE, json={**payload, "photo": PHOTO})
+    assert response.status_code == 201
+    assert response.json()["photo"] == PHOTO
+
+
+def test_photo_rejects_svg_data_url(client, payload):
+    svg = "data:image/svg+xml;base64," + base64.b64encode(b"<svg/>").decode()
+    response = client.post(BASE, json={**payload, "photo": svg})
+    assert response.status_code == 422
+
+
+def test_photo_rejects_empty_payload(client, payload):
+    response = client.post(BASE, json={**payload, "photo": "data:image/png;base64,"})
+    assert response.status_code == 422
+
+
+def test_photo_rejects_invalid_base64(client, payload):
+    response = client.post(BASE, json={**payload, "photo": "data:image/png;base64,%%not-base64%%"})
+    assert response.status_code == 422
+
+
+def test_put_without_photo_clears_it(client, payload):
+    contact_id = client.post(BASE, json={**payload, "photo": PHOTO}).json()["id"]
+    response = client.put(
+        f"{BASE}/{contact_id}",
+        json={"first_name": "Ada", "last_name": "Lovelace", "email": "ada@example.com"},
+    )
+    assert response.status_code == 200
+    assert response.json()["photo"] is None  # PUT is a full replace
+
+
+def test_photo_rejects_oversize_payload(client, payload):
+    huge = "data:image/png;base64," + "A" * 2_000_000
+    response = client.post(BASE, json={**payload, "photo": huge})
+    assert response.status_code == 422
+
+
+def test_patch_preserves_photo_when_omitted(client, payload):
+    contact_id = client.post(BASE, json={**payload, "photo": PHOTO}).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"job_title": "Chief Engineer"})
+    assert response.status_code == 200
+    assert response.json()["photo"] == PHOTO
+
+
+def test_patch_null_clears_photo(client, payload):
+    contact_id = client.post(BASE, json={**payload, "photo": PHOTO}).json()["id"]
+    response = client.patch(f"{BASE}/{contact_id}", json={"photo": None})
+    assert response.status_code == 200
+    assert response.json()["photo"] is None
+
+
+def test_put_replaces_existing_photo(client, payload):
+    contact_id = client.post(BASE, json={**payload, "photo": PHOTO}).json()["id"]
+    new_photo = "data:image/jpeg;base64," + base64.b64encode(b"another-image").decode()
+    response = client.put(f"{BASE}/{contact_id}", json={**payload, "photo": new_photo})
+    assert response.status_code == 200
+    assert response.json()["photo"] == new_photo

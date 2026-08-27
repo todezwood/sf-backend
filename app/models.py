@@ -30,6 +30,7 @@ class Contact(Base):
     country: Mapped[str | None] = mapped_column(String(120))
 
     notes: Mapped[str | None] = mapped_column(Text)
+    photo: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now(), nullable=False

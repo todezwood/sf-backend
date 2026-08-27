@@ -96,13 +96,20 @@ def _migrate_flat_addresses(contact_columns: set[str]) -> None:
     legacy = {"address", "city", "state", "postal_code", "country"}
     if not legacy <= contact_columns:
         return
+    # The copy and the blanking of the source columns commit together: the
+    # nulled columns are the migration marker, so a re-run — or a concurrent
+    # worker, once the first commit lands — finds nothing left to move. The
+    # NOT EXISTS guard additionally keeps the insert idempotent per contact.
     with engine.begin() as connection:
-        count = connection.exec_driver_sql("SELECT COUNT(*) FROM addresses").scalar()
-        if count:
-            return
         connection.exec_driver_sql(
             "INSERT INTO addresses (contact_id, type, street, city, state, postal_code, country) "
             "SELECT id, 'Home', address, city, state, postal_code, country FROM contacts "
+            "WHERE COALESCE(address, city, state, postal_code, country) IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM addresses WHERE addresses.contact_id = contacts.id)"
+        )
+        connection.exec_driver_sql(
+            "UPDATE contacts SET address = NULL, city = NULL, state = NULL, "
+            "postal_code = NULL, country = NULL "
             "WHERE COALESCE(address, city, state, postal_code, country) IS NOT NULL"
         )
 

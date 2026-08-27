@@ -299,7 +299,26 @@ def test_init_db_migrates_flat_addresses_from_legacy_table():
         rows = connection.exec_driver_sql(
             "SELECT contact_id, type, street, city FROM addresses"
         ).fetchall()
+        blanked = connection.exec_driver_sql(
+            "SELECT COALESCE(address, city, state, postal_code, country) FROM contacts WHERE id = 1"
+        ).scalar()
     assert rows == [(1, "Home", "1 Market St", "San Francisco")]
+    # The source columns are blanked in the same transaction — they are the
+    # migration marker, so re-runs cannot duplicate or resurrect data.
+    assert blanked is None
+
+    init_db()
+    with engine.begin() as connection:
+        total = connection.exec_driver_sql("SELECT COUNT(*) FROM addresses").scalar()
+    assert total == 1
+
+    # Deleted rows stay deleted across restarts: nothing left to re-migrate.
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DELETE FROM addresses")
+    init_db()
+    with engine.begin() as connection:
+        total = connection.exec_driver_sql("SELECT COUNT(*) FROM addresses").scalar()
+    assert total == 0
 
 
 def test_init_db_adds_photo_column_to_legacy_table():
